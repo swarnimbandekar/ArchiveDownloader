@@ -1,3 +1,5 @@
 requests
 rich
 typer
+colorama
+tqdm
