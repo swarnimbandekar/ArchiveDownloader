@@ -17,8 +17,8 @@ A simple Python CLI tool to download files from a list of URLs (e.g., from the W
 
 1. **Clone this repository or download the script**:
    ```bash
-   git clone https://github.com/yourusername/webarchive-downloader.git
-   cd webarchive-downloader
+   git clone https://github.com/swarnimbandekar/ArchiveDownloader.git
+   cd ArchiveDownloader
    ```
 2. **Install the required dependencies**:
    ```bash
@@ -30,7 +30,7 @@ A simple Python CLI tool to download files from a list of URLs (e.g., from the W
 ## 🧪 Usage
 
 ```bash
-   python archivedownloader.py -l urls.txt -o output/
+   python3 archivedownloader.py -l urls.txt -o output/
    ```
 **Arguments**:
 - -l, --list: Path to a text file containing URLs (one per line)
