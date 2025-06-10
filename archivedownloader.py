@@ -1,83 +1,88 @@
+import argparse
 import os
-import time
 import requests
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse, urlunparse, quote
+from rich.progress import Progress, BarColumn, TimeElapsedColumn, TextColumn
 from rich.console import Console
-from rich.progress import track
 from rich.panel import Panel
+from rich.table import Table
 
 console = Console()
 
-def download_file(url, output_dir, retries=3, timeout=60):
-    parsed_url = urlparse(url)
-    filename = unquote(os.path.basename(parsed_url.path)) or "downloaded_file"
-    output_path = os.path.join(output_dir, filename)
+def smart_encode_url(url):
+    parsed = urlparse(url.strip())
+    encoded_path = quote(parsed.path)
+    return urlunparse((parsed.scheme, parsed.netloc, encoded_path, parsed.params, parsed.query, parsed.fragment))
 
-    for attempt in range(1, retries + 1):
-        try:
-            response = requests.get(url, stream=True, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
-            response.raise_for_status()
-
-            with open(output_path, "wb") as f:
+def download_file(url, output_dir):
+    try:
+        response = requests.get(url, stream=True, timeout=10)
+        if response.status_code == 200:
+            filename = os.path.basename(urlparse(url).path)
+            filename = filename.strip().rstrip('.')  # Sanitize
+            output_path = os.path.join(output_dir, filename)
+            with open(output_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-
-            console.print(f"✅ [bold green]Downloaded:[/bold green] {filename}")
-            return True
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
-                console.print(f"❌ [bold red]Not Found (404):[/bold red] {filename}")
-                return False
-            else:
-                console.print(f"❌ [red]HTTP Error:[/red] {e}")
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
-            console.print(f"⚠️ [yellow]Retrying {filename} ({attempt}/{retries})...[/yellow]")
-            time.sleep(2)
-        except Exception as e:
-            console.print(f"❌ [red]Error downloading {filename}:[/red] {e}")
-            return False
-    console.print(f"❌ [red]Failed after {retries} retries:[/red] {filename}")
-    return False
-
-
-def download_from_list(file_path, output_dir):
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    with open(file_path, "r") as f:
-        urls = [line.strip() for line in f if line.strip()]
-
-    failed_urls = []
-    success_count = 0
-
-    console.print(Panel.fit(f"📥 Starting Download: {len(urls)} files", style="bold blue"))
-
-    for url in track(urls, description="[cyan]Downloading files..."):
-        success = download_file(url, output_dir)
-        if not success:
-            failed_urls.append(url)
+                    if chunk:
+                        f.write(chunk)
+            return True, filename
         else:
-            success_count += 1
+            return False, os.path.basename(url), response.status_code
+    except Exception as e:
+        return False, os.path.basename(url), str(e)
+
+def main():
+    parser = argparse.ArgumentParser(description="📥 Archive Downloader Tool")
+    parser.add_argument("-l", "--link-file", required=True, help="Path to the .txt file containing URLs")
+    parser.add_argument("-o", "--output", required=True, help="Output directory to save the files")
+    args = parser.parse_args()
+
+    os.makedirs(args.output, exist_ok=True)
+
+    with open(args.link_file, "r") as f:
+        links = [line.strip() for line in f if line.strip()]
+
+    console.print(Panel.fit(f"📥 [bold cyan]Starting Download: {len(links)} files[/bold cyan]", title="Archive Downloader", style="bold green"))
+
+    success_count = 0
+    fail_count = 0
+    failed_urls = []
+
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.percentage:>3.0f}%"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Downloading files...", total=len(links))
+
+        for link in links:
+            url = smart_encode_url(link)
+            result = download_file(url, args.output)
+            if result[0]:
+                console.print(f"✅ [green]Downloaded:[/green] {result[1]}")
+                success_count += 1
+            else:
+                status = result[2] if len(result) > 2 else "Unknown error"
+                console.print(f"❌ [red]Not Found ({status}):[/red] {result[1]}")
+                failed_urls.append(link)
+                fail_count += 1
+            progress.update(task, advance=1)
 
     # Summary
-    console.print()
-    console.rule("[bold blue]Download Summary")
-    console.print(f"✅ [green]Successfully downloaded:[/green] {success_count}")
-    console.print(f"❌ [red]Failed downloads:[/red] {len(failed_urls)}")
+    summary = Table(title="Download Summary", title_style="bold magenta")
+    summary.add_column("Status", justify="center", style="cyan", no_wrap=True)
+    summary.add_column("Count", justify="center", style="bold yellow")
+    summary.add_row("✅ Successful", str(success_count))
+    summary.add_row("❌ Failed", str(fail_count))
+    console.print(summary)
 
     if failed_urls:
-        fail_log_path = os.path.join(output_dir, "failed_urls.txt")
-        with open(fail_log_path, "w") as f:
+        failed_file_path = os.path.join(args.output, "failed_urls.txt")
+        with open(failed_file_path, "w") as f:
             f.write("\n".join(failed_urls))
-        console.print(f"📄 [yellow]Failed URLs saved to:[/yellow] {fail_log_path}")
-
+        console.print(f"📄 [italic yellow]Failed URLs saved to:[/italic yellow] {failed_file_path}")
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Download files from a list of URLs")
-    parser.add_argument("-l", "--list", required=True, help="Path to the URL list file")
-    parser.add_argument("-o", "--output", default="downloads", help="Output directory for downloaded files")
-
-    args = parser.parse_args()
-    download_from_list(args.list, args.output)
+    main()
