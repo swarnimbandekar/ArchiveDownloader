@@ -8,24 +8,39 @@ from rich.table import Table
 
 console = Console()
 
-WAYBACK_PREFIX = "https://web.archive.org/web/20230000000000if_/"
-
 def smart_encode_url(url):
     parsed = urlparse(url.strip())
     safe_path = quote(unquote(parsed.path), safe="/:")
     return urlunparse((parsed.scheme, parsed.netloc, safe_path, parsed.params, parsed.query, parsed.fragment))
 
-def build_wayback_url(url):
-    return WAYBACK_PREFIX + quote(url, safe=":/")
+def get_wayback_snapshot_url(original_url):
+    cdx_url = "http://web.archive.org/cdx/search/cdx"
+    params = {
+        "url": original_url,
+        "output": "json",
+        "fl": "timestamp,original",
+        "filter": "statuscode:200",
+        "limit": 1,
+        "collapse": "digest"
+    }
+    try:
+        response = requests.get(cdx_url, params=params, timeout=10)
+        if response.status_code == 200 and len(response.json()) > 1:
+            snapshot = response.json()[1]  # First item is header
+            timestamp = snapshot[0]
+            return f"https://web.archive.org/web/{timestamp}if_/{original_url}"
+    except:
+        pass
+    return None
 
 def download_file(url, output_dir):
+    file_name = os.path.basename(unquote(urlparse(url).path))
     try:
-        original_url = smart_encode_url(url)
-        archive_url = build_wayback_url(original_url)
-        file_name = os.path.basename(unquote(urlparse(original_url).path))
+        archive_url = get_wayback_snapshot_url(url)
+        if not archive_url:
+            return (file_name, False, "Not Found")
 
-        response = requests.get(archive_url, stream=True, timeout=15)
-
+        response = requests.get(archive_url, stream=True, timeout=10)
         if response.status_code == 200:
             file_path = os.path.join(output_dir, file_name)
             with open(file_path, 'wb') as f:
@@ -34,17 +49,17 @@ def download_file(url, output_dir):
                         f.write(chunk)
             return (file_name, True, "")
         else:
-            return (file_name, False, f"{response.status_code}")
-    except Exception as e:
-        return (file_name, False, str(e))
+            return (file_name, False, "Not Found")
+    except:
+        return (file_name, False, "Not Found")
 
 def load_urls_from_file(file_path):
     with open(file_path, 'r') as f:
         return [line.strip() for line in f if line.strip()]
 
 def main():
-    parser = argparse.ArgumentParser(description="📦 Archive.org Downloader Tool (via Wayback Machine)")
-    parser.add_argument('-u', '--url', type=str, help="Single URL to download from Wayback")
+    parser = argparse.ArgumentParser(description="📦 Archive Downloader Tool (Wayback Version)")
+    parser.add_argument('-u', '--url', type=str, help="Single URL to download")
     parser.add_argument('-l', '--list', type=str, help="Path to .txt file containing list of URLs")
     parser.add_argument('-o', '--output', type=str, default='downloads', help="Output directory to save files")
     args = parser.parse_args()
@@ -73,9 +88,9 @@ def main():
         TimeRemainingColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("Downloading archived files...", total=total)
+        task = progress.add_task("Downloading files...", total=total)
         for url in urls:
-            filename, success, error = download_file(url, args.output)
+            filename, success, _ = download_file(url, args.output)
             if success:
                 console.print(f"[green]✅ Downloaded:[/green] {filename}")
                 success_count += 1
@@ -91,8 +106,8 @@ def main():
             for url in failed_urls:
                 f.write(url + "\n")
 
-    # Summary
-    console.print("\n[bold magenta]──────────────────── Download Summary ────────────────────[/bold magenta]\n")
+    # Summary table
+    console.print("\n[bold magenta]──────────────────────────────────────────────────── Download Summary ────────────────────────────────────────────────────[/bold magenta]\n")
     summary = Table(show_header=True, header_style="bold blue")
     summary.add_column("Status", justify="center")
     summary.add_column("Count", justify="center")
