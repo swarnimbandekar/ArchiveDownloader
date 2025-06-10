@@ -8,16 +8,23 @@ from rich.table import Table
 
 console = Console()
 
+WAYBACK_PREFIX = "https://web.archive.org/web/20230000000000if_/"
+
 def smart_encode_url(url):
     parsed = urlparse(url.strip())
     safe_path = quote(unquote(parsed.path), safe="/:")
     return urlunparse((parsed.scheme, parsed.netloc, safe_path, parsed.params, parsed.query, parsed.fragment))
 
+def build_wayback_url(url):
+    return WAYBACK_PREFIX + quote(url, safe=":/")
+
 def download_file(url, output_dir):
     try:
-        encoded_url = smart_encode_url(url)
-        file_name = os.path.basename(unquote(urlparse(encoded_url).path))
-        response = requests.get(encoded_url, stream=True)
+        original_url = smart_encode_url(url)
+        archive_url = build_wayback_url(original_url)
+        file_name = os.path.basename(unquote(urlparse(original_url).path))
+
+        response = requests.get(archive_url, stream=True, timeout=15)
 
         if response.status_code == 200:
             file_path = os.path.join(output_dir, file_name)
@@ -36,8 +43,8 @@ def load_urls_from_file(file_path):
         return [line.strip() for line in f if line.strip()]
 
 def main():
-    parser = argparse.ArgumentParser(description="📦 Archive Downloader Tool")
-    parser.add_argument('-u', '--url', type=str, help="Single URL to download")
+    parser = argparse.ArgumentParser(description="📦 Archive.org Downloader Tool (via Wayback Machine)")
+    parser.add_argument('-u', '--url', type=str, help="Single URL to download from Wayback")
     parser.add_argument('-l', '--list', type=str, help="Path to .txt file containing list of URLs")
     parser.add_argument('-o', '--output', type=str, default='downloads', help="Output directory to save files")
     args = parser.parse_args()
@@ -54,7 +61,7 @@ def main():
     os.makedirs(args.output, exist_ok=True)
 
     total = len(urls)
-    console.print(f"\n[bold cyan]📥 Starting Download: {total} file{'s' if total != 1 else ''}[/bold cyan]\n")
+    console.print(f"\n[bold cyan]🌐 Downloading from Internet Archive: {total} file{'s' if total != 1 else ''}[/bold cyan]\n")
 
     success_count = 0
     failed_urls = []
@@ -66,7 +73,7 @@ def main():
         TimeRemainingColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("Downloading files...", total=total)
+        task = progress.add_task("Downloading archived files...", total=total)
         for url in urls:
             filename, success, error = download_file(url, args.output)
             if success:
@@ -84,8 +91,8 @@ def main():
             for url in failed_urls:
                 f.write(url + "\n")
 
-    # Summary table
-    console.print("\n[bold magenta]──────────────────────────────────────────────────── Download Summary ────────────────────────────────────────────────────[/bold magenta]\n")
+    # Summary
+    console.print("\n[bold magenta]──────────────────── Download Summary ────────────────────[/bold magenta]\n")
     summary = Table(show_header=True, header_style="bold blue")
     summary.add_column("Status", justify="center")
     summary.add_column("Count", justify="center")
