@@ -1,88 +1,100 @@
 import argparse
 import os
 import requests
-from urllib.parse import urlparse, urlunparse, quote
-from rich.progress import Progress, BarColumn, TimeElapsedColumn, TextColumn
+from urllib.parse import urlparse, quote, unquote, urlunparse
 from rich.console import Console
-from rich.panel import Panel
+from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
 from rich.table import Table
 
 console = Console()
 
 def smart_encode_url(url):
     parsed = urlparse(url.strip())
-    encoded_path = quote(parsed.path)
-    return urlunparse((parsed.scheme, parsed.netloc, encoded_path, parsed.params, parsed.query, parsed.fragment))
+    safe_path = quote(unquote(parsed.path), safe="/:")
+    return urlunparse((parsed.scheme, parsed.netloc, safe_path, parsed.params, parsed.query, parsed.fragment))
 
 def download_file(url, output_dir):
     try:
-        response = requests.get(url, stream=True, timeout=10)
+        encoded_url = smart_encode_url(url)
+        file_name = os.path.basename(unquote(urlparse(encoded_url).path))
+        response = requests.get(encoded_url, stream=True)
+
         if response.status_code == 200:
-            filename = os.path.basename(urlparse(url).path)
-            filename = filename.strip().rstrip('.')  # Sanitize
-            output_path = os.path.join(output_dir, filename)
-            with open(output_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
+            file_path = os.path.join(output_dir, file_name)
+            with open(file_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=1024):
                     if chunk:
                         f.write(chunk)
-            return True, filename
+            return (file_name, True, "")
         else:
-            return False, os.path.basename(url), response.status_code
+            return (file_name, False, f"{response.status_code}")
     except Exception as e:
-        return False, os.path.basename(url), str(e)
+        return (file_name, False, str(e))
+
+def load_urls_from_file(file_path):
+    with open(file_path, 'r') as f:
+        return [line.strip() for line in f if line.strip()]
 
 def main():
-    parser = argparse.ArgumentParser(description="📥 Archive Downloader Tool")
-    parser.add_argument("-l", "--link-file", required=True, help="Path to the .txt file containing URLs")
-    parser.add_argument("-o", "--output", required=True, help="Output directory to save the files")
+    parser = argparse.ArgumentParser(description="📦 Archive Downloader Tool")
+    parser.add_argument('-u', '--url', type=str, help="Single URL to download")
+    parser.add_argument('-l', '--list', type=str, help="Path to .txt file containing list of URLs")
+    parser.add_argument('-o', '--output', type=str, default='downloads', help="Output directory to save files")
     args = parser.parse_args()
+
+    urls = []
+    if args.url:
+        urls = [args.url]
+    elif args.list:
+        urls = load_urls_from_file(args.list)
+    else:
+        console.print("[red]❌ Please provide either a single URL (-u) or a list file (-l)[/red]")
+        return
 
     os.makedirs(args.output, exist_ok=True)
 
-    with open(args.link_file, "r") as f:
-        links = [line.strip() for line in f if line.strip()]
-
-    console.print(Panel.fit(f"📥 [bold cyan]Starting Download: {len(links)} files[/bold cyan]", title="Archive Downloader", style="bold green"))
+    total = len(urls)
+    console.print(f"\n[bold cyan]📥 Starting Download: {total} file{'s' if total != 1 else ''}[/bold cyan]\n")
 
     success_count = 0
-    fail_count = 0
     failed_urls = []
 
     with Progress(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
-        TextColumn("{task.percentage:>3.0f}%"),
-        TimeElapsedColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeRemainingColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("Downloading files...", total=len(links))
-
-        for link in links:
-            url = smart_encode_url(link)
-            result = download_file(url, args.output)
-            if result[0]:
-                console.print(f"✅ [green]Downloaded:[/green] {result[1]}")
+        task = progress.add_task("Downloading files...", total=total)
+        for url in urls:
+            filename, success, error = download_file(url, args.output)
+            if success:
+                console.print(f"[green]✅ Downloaded:[/green] {filename}")
                 success_count += 1
             else:
-                status = result[2] if len(result) > 2 else "Unknown error"
-                console.print(f"❌ [red]Not Found ({status}):[/red] {result[1]}")
-                failed_urls.append(link)
-                fail_count += 1
+                console.print(f"[red]❌ Not Found ({error}):[/red] {filename}")
+                failed_urls.append(url)
             progress.update(task, advance=1)
 
-    # Summary
-    summary = Table(title="Download Summary", title_style="bold magenta")
-    summary.add_column("Status", justify="center", style="cyan", no_wrap=True)
-    summary.add_column("Count", justify="center", style="bold yellow")
+    # Save failed URLs
+    if failed_urls:
+        failed_file = os.path.join(args.output, 'failed_urls.txt')
+        with open(failed_file, 'w') as f:
+            for url in failed_urls:
+                f.write(url + "\n")
+
+    # Summary table
+    console.print("\n[bold magenta]──────────────────────────────────────────────────── Download Summary ────────────────────────────────────────────────────[/bold magenta]\n")
+    summary = Table(show_header=True, header_style="bold blue")
+    summary.add_column("Status", justify="center")
+    summary.add_column("Count", justify="center")
     summary.add_row("✅ Successful", str(success_count))
-    summary.add_row("❌ Failed", str(fail_count))
+    summary.add_row("❌ Failed", str(len(failed_urls)))
     console.print(summary)
 
     if failed_urls:
-        failed_file_path = os.path.join(args.output, "failed_urls.txt")
-        with open(failed_file_path, "w") as f:
-            f.write("\n".join(failed_urls))
-        console.print(f"📄 [italic yellow]Failed URLs saved to:[/italic yellow] {failed_file_path}")
+        console.print(f"\n📄 [yellow]Failed URLs saved to:[/yellow] {failed_file}\n")
 
 if __name__ == "__main__":
     main()
