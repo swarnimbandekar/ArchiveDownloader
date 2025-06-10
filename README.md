@@ -30,8 +30,8 @@ A simple Python CLI tool to download files from a list of URLs (e.g., from the W
 ## 🧪 Usage
 
 ```bash
-   python3 archivedownloader.py -l urls.txt -o output/
-   ```
+python3 archivedownloader.py -l urls.txt -o output/
+```
 **Arguments**:
 - -l, --list: Path to a text file containing URLs (one per line)
 - -o, --output: Directory where downloaded files will be saved
